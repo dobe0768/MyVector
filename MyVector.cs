@@ -1,421 +1,276 @@
 using System;
+using System.IO;
+using System.Text.RegularExpressions;
 using System.Collections.Generic;
 using System.Data.Common;
-using System.Linq;
+using System.Collections;
 using System.Runtime.CompilerServices;
-using System.Runtime.Serialization;
-using System.Text;
-using System.Threading.Tasks;
 
-namespace MyVector
+class IsReadOnlyException : Exception { }
+
+interface IVector<T> : System.Collections.Generic.ICollection<T>
 {
-    public class NotSupportedInterfaceException : Exception
+
+    public void PopBack();
+
+    public int Capacity();
+
+    public void ChangeCapacity(int newCapacity);
+
+    public void ShrinkToFit();
+
+    public int Size();
+
+    public T this[int index]
     {
-        public NotSupportedInterfaceException() { }
+        get;
+        set;
+    }
+}
 
-        public NotSupportedInterfaceException(string? message) : base(message) { }
+class VectorEnum<T> : IEnumerator, IEnumerator<T>
+{
+    private readonly Vector<T> vec;
+    private int index = 0;
 
-        public NotSupportedInterfaceException(string? message, Exception? innerException) : base(message, innerException) { }
-
-        protected NotSupportedInterfaceException(SerializationInfo info, StreamingContext context) : base(info, context) { }
+    public VectorEnum(Vector<T> vec)
+    {
+        this.vec = vec;
     }
 
+    public object Current => vec[index];
 
-    public class Vector<T> : IEquatable<Vector<T>>, ICloneable, IComparable<Vector<T>>
+    T IEnumerator<T>.Current => vec[index];
+
+    public void Dispose() { }
+
+    public bool MoveNext()
     {
-        protected T[] vec;
-        protected int sz;
-
-        protected static void CopyArray(T[] source, T[] destination, int sz)
+        if (index++ == vec.Size())
         {
-            for (int i = 0; i < sz; ++i)
+            return false;
+        }
+        return true;
+    }
+
+    public void Reset()
+    {
+        index = 0;
+    }
+}
+
+class Vector<T> : IVector<T>
+{
+    private T[] vec;
+    private int sz;
+    bool readOnly;
+
+    public Vector()
+    {
+        vec = Array.Empty<T>();
+        sz = 0;
+        readOnly = false;
+    }
+
+    public Vector(Vector<T> other)
+    {
+        vec = new T[other.vec.Length];
+        sz = other.sz;
+        Array.Copy(other.vec, vec, sz);
+        readOnly = other.readOnly;
+    }
+
+    public Vector(int sz)
+    {
+        this.sz = sz;
+        vec = new T[sz];
+        readOnly = false;
+    }
+
+    public T this[int index]
+    {
+        get
+        {
+            if (index < 0 || index >= sz)
             {
-                if (source[i] is ICloneable cloneable)
-                {
-                    destination[i] = (T)cloneable.Clone();
-                }
-                else
-                {
-                    destination[i] = source[i];
-                }
+                throw new IndexOutOfRangeException();
             }
+            return vec[index];
         }
-
-        protected void ChangeCapacity(int cap)
+        set
         {
-            T[] temp = new T[cap];
-            Array.Copy(vec, temp, sz);
-            vec = temp;
-        }
-
-        public Vector()
-        {
-            vec = new T[2];
-            sz = 0;
-        }
-
-        public Vector(T[] arr)
-        {
-            int cap = 0;
-            for (; cap < arr.Length; cap <<= 1) { }
-            vec = new T[cap];
-            sz = arr.Length;
-            CopyArray(arr, vec, sz);
-        }
-
-        public Vector(Vector<T> vector)
-        {
-            vec = new T[vector.vec.Length];
-            sz = vector.sz;
-            CopyArray(vector.vec, vec, sz);
-        }
-
-        public Vector(int sz)
-        {
-            int cap = 2;
-            for (; cap < sz; cap <<= 1) { }
-            this.sz = sz;
-            vec = new T[cap];
-        }
-
-        public Vector(int sz, ref T el)
-        {
-            int cap = 2;
-            for (; cap < sz; cap <<= 1) { }
-            vec = new T[cap];
-            this.sz = sz;
-            if (el is ICloneable cloneable)
+            if (IsReadOnly)
             {
-                for (int i = 0; i < sz; ++i)
-                {
-                    vec[i] = (T)cloneable.Clone();
-                }
+                throw new IsReadOnlyException();
             }
-            else
+            if (index < 0 || index >= sz)
             {
-                for (int i = 0; i < sz; ++i)
-                {
-                    vec[i] = el;
-                }
+                throw new IndexOutOfRangeException();
             }
+            vec[index] = value;
         }
+    }
 
-        public Vector(int sz, T el) : this(sz, ref el) { }
+    public int Count
+    {
+        get => sz;
+    }
 
-        public void PushBack(ref T el)
+    public bool IsReadOnly
+    {
+        get => readOnly;
+        set => readOnly = value;
+    }
+
+    public void Add(Vector<T> other)
+    {
+        for (int i= 0; i < other.Size(); ++i)
         {
-            if (sz == vec.Length)
-            {
-                ChangeCapacity(2 * sz);
-            }
-            if (el is ICloneable cloneable)
-            {
-                vec[sz++] = (T)cloneable.Clone();
-            }
-            else
-            {
-                vec[sz++] = el;
-            }
+            Add(other[i]);
         }
+    }
 
-        public void PushBack(T el)
+    public void Add(T item)
+    {
+        if (IsReadOnly)
         {
-            PushBack(ref el);
+            throw new IsReadOnlyException();
         }
-
-        public void PopBack()
+        if (sz == vec.Length)
         {
-            if (sz != 0)
-            {
-                --sz;
-                if (sz < vec.Length / 4)
-                {
-                    ChangeCapacity(vec.Length / 2);
-                }
-            }
+            ChangeCapacity(2 * sz > 1 ? 2 * sz : 1);
         }
+        vec[sz++] = item;
+    }
 
-        public int Size()
+    public int Capacity()
+    {
+        return vec.Length;
+    }
+
+    public void ChangeCapacity(int newCapacity)
+    {
+        if (newCapacity < sz)
         {
-            return sz;
+            throw new IndexOutOfRangeException();
         }
+        T[] newVec = new T[newCapacity];
+        Array.Copy(vec, newVec, sz);
+        vec = newVec;
+    }
 
-        public int Capacity()
+    public void Clear()
+    {
+        if (readOnly)
         {
-            return vec.Length;
+            throw new IsReadOnlyException();
         }
+        vec = Array.Empty<T>();
+        sz = 0;
+    }
 
-        public void ShrinkToFit()
+    public bool Contains(T item, Comparer<T> comparer)
+    {
+        for (int i = 0; i < sz; ++i)
         {
-            ChangeCapacity(sz);
-        }
-
-        public void Reserve(int capacity)
-        {
-            if (capacity > vec.Length)
-            {
-                ChangeCapacity(capacity);
-            }
-        }
-
-        public void Clear()
-        {
-            vec = new T[2];
-            sz = 0;
-        }
-
-        public int Find(ref T el)
-        {
-            if (sz == 0)
-            {
-                return -1;
-            }
-            if (el is IEquatable<T> equatable)
-            {
-                for (int i = 0; i < sz; ++i)
-                {
-                    if (equatable.Equals(vec[i]))
-                    {
-                        return i;
-                    }
-                }
-            }
-            else
-            {
-                if (vec[0] == null)
-                {
-                    throw new ArgumentNullException();
-                }
-                else
-                {
-                    throw new NotSupportedInterfaceException("Class not supported IEquatable interface");
-                }
-            }
-            return -1;
-        }
-
-        public int Find(T el)
-        {
-            return Find(ref el);
-        }
-
-        protected static void Copy(T[] source, T[] destination, int start, int sz)
-        {
-            for (int i = 0; i < sz; ++i)
-            {
-                destination[start + i] = source[i];
-            }
-        }
-
-        protected void Merge(int start, int mid, int end, Func<T, T, bool> IsLower)
-        {
-            T[] temp = new T[end - start + 1];
-            int midCp = mid;
-            for (int i = 0; i < temp.Length; ++i)
-            {
-                if (mid == end + 1 || start < midCp && IsLower(vec[start], vec[mid]))
-                {
-                    temp[i] = vec[start++];
-                }
-                else
-                {
-                    temp[i] = vec[mid++];
-                }
-            }
-            Copy(temp, vec, end - temp.Length + 1, temp.Length);
-        }
-
-        public void Sort(Func<T, T, bool> IsLower, int start = 0, int end = -2)
-        {
-            if (end == -2)
-            {
-                end = sz - 1;
-            }
-            if (end <= start)
-            {
-                return;
-            }
-            if (end == start + 1)
-            {
-                if (!IsLower(vec[start], vec[end]))
-                {
-                    (vec[start], vec[end]) = (vec[end], vec[start]);
-                }
-                return;
-            }
-            int mid = (start + end) / 2;
-            Sort(IsLower, start, mid);
-            Sort(IsLower, mid + 1, end);
-
-            Merge(start, mid + 1, end, IsLower);
-        }
-
-        public void Sort()
-        {
-            if (sz == 0)
-            {
-                return;
-            }
-            if (vec[0] is IComparable)
-            {
-                static bool isLower(T a, T b)
-                {
-                    if (a == null || b == null)
-                    {
-                        throw new ArgumentNullException();
-                    }
-                    return ((IComparable)(a)).CompareTo(b) < 0;
-                }
-                Sort(isLower);
-            }
-            else
-            {
-                if (vec[0] != null)
-                {
-                    throw new NotSupportedInterfaceException("Class not supported IComparable interface");
-                }
-                else
-                {
-                    throw new NullReferenceException();
-                }
-            }
-        }
-
-        bool IEquatable<Vector<T>>.Equals(Vector<T>? other)
-        {
-            if (other == null)
-            {
-                throw new ArgumentNullException();
-            }
-            if (other.Size() == 0 && Size() == 0)
+            if (comparer.Compare(item, vec[i]) == 0)
             {
                 return true;
             }
-            if (other.Size() != Size())
-            {
-                return false;
-            }
-            if (vec[0] is not IEquatable<Vector<T>>)
-            {
-                if (vec[0] == null)
-                {
-                    throw new ArgumentNullException();
-                }
-                throw new NotSupportedInterfaceException("Class not supported IEquatable interface");
-            }
-            /*
-            for (int i = 0; i < Size(); ++i)
-            {
-                if (!((IEquatable<Vector<T>>)(vec[i])).Equals(other.vec[i]))
-                {
-                    return false;
-                }
-            }
-            */
-            return true;
         }
+        return false;
+    }
 
+    public bool Contains(T item)
+    {
+        return Contains(item, Comparer<T>.Default);
+    }
 
-        public override string ToString()
+    public void CopyTo(T[] array, int arrayIndex)
+    {
+        Array.Copy(vec, 0, array, arrayIndex, sz);
+    }
+
+    public IEnumerator<T> GetEnumerator()
+    {
+        return new VectorEnum<T>(this);
+    }
+
+    public void PopBack()
+    {
+        if (readOnly)
         {
-            if (sz == 0)
-            {
-                return "[]";
-            }
-            string result = "[";
-            for (int i = 0; i < sz - 1; ++i)
-            {
-                if (vec[i] != null)
-                {
-                    result += vec[i].ToString() + ", ";
-                }
-                else
-                {
-                    result += "Null, ";
-                }
-            }
-            if (vec[sz - 1] != null)
-            {
-                result += vec[sz - 1].ToString() + "]";
-            }
-            else
-            {
-                result += "Null]";
-            }
-            return result;
+            throw new IsReadOnlyException();
         }
-
-        object ICloneable.Clone()
+        if (sz == 0)
         {
-            Vector<T> result = new(this);
-            return result;
+            throw new IndexOutOfRangeException();
         }
-
-        int IComparable<Vector<T>>.CompareTo(Vector<T>? other)
+        --sz;
+        if (vec.Length / 4 > sz)
         {
-            if (other == null)
-            {
-                throw new ArgumentNullException();
-            }
-            if (other.sz == 0 && sz == 0)
-            {
-                return 0;
-            }
-            if (sz == 0)
-            {
-                return -1;
-            }
-            if (other.sz == 0)
-            {
-                return 1;
-            }
-            if (vec[0] is not IComparable<T>)
-            {
-                if (vec[0] == null)
-                {
-                    throw new ArgumentNullException();
-                }
-                throw new NotSupportedInterfaceException("Class  not supported IComparable interface");
-            }
-            return 1;
-            // Not realized yet
-        }
-
-        public T this[int ind]
-        {
-            get
-            {
-                return vec[ind];
-            }
-            set
-            {
-                if (value is ICloneable cloneable)
-                {
-                    vec[ind] = (T)cloneable.Clone();
-                }
-                else
-                {
-                    vec[ind] = value;
-                }
-            }
-        }
-
-        public override bool Equals(object? obj)
-        {
-            return ((IEquatable<Vector<T>>)this).Equals(obj as Vector<T>);
-        }
-
-        public override int GetHashCode()
-        {
-            return vec.GetHashCode();
-        }
-
-        public static explicit operator T[](Vector<T> v)
-        {
-            T[] result = new T[v.Size()];
-            CopyArray(v.vec, result, v.Size());
-            return result;
+            ChangeCapacity(vec.Length / 2);
         }
     }
 
+    private void Remove(int index)
+    {
+        --sz;
+        T[] newVec = new T[sz < vec.Length / 4 ? vec.Length / 2 : vec.Length];
+        int c = 0;
+        for (int i = 0; i < sz + 1; ++i)
+        {
+            if (i != index)
+            {
+                c = 1;
+                continue;
+            }
+            newVec[i - c] = vec[i];
+        }
+        vec = newVec;
+    }
+
+    public bool Remove(T item, Comparer<T> comparer)
+    {
+        if (readOnly)
+        {
+            throw new IsReadOnlyException();
+        }
+        for (int i = 0; i < sz; ++i)
+        {
+            if (comparer.Compare(item, vec[i]) == 0)
+            {
+                Remove(i);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public bool Remove(T item)
+    {
+        return Remove(item, Comparer<T>.Default);
+    }
+
+    public void ShrinkToFit()
+    {
+        ChangeCapacity(sz);
+    }
+
+    public int Size()
+    {
+        return sz;
+    }
+
+    IEnumerator IEnumerable.GetEnumerator()
+    {
+        return new VectorEnum<T>(this);
+    }
+
+    public static explicit operator T[](Vector<T> vec)
+    {
+        T[] result = new T[vec.sz];
+        Array.Copy(vec.vec, result, vec.sz);
+        return result;
+    }
 }
